@@ -1,0 +1,70 @@
+本程序基于Direct3D的图形应用框架，用于渲染一个六边形
+
+1. 入口点：WinMain
+程序从 Main.cpp 中的 WinMain 函数开始执行：
+并依次完成一下操作
+	1、创建 GameApp 对象，传入应用实例句柄、窗口标题和初始宽高。
+	2、调用 Init() 进行初始化（窗口、Direct3D、资源和效果）。
+	3、调用 Run() 进入主消息循环。
+
+2. 初始化：GameApp::Init() 与基类 D3DApp::Init()
+	GameApp::Init() 先调用基类的 D3DApp::Init()，再调用自己的 InitEffect() 和 InitResource()。
+
+	1、 窗口初始化（D3DApp::InitMainWindow）
+		注册一个窗口类（WNDCLASS），指定窗口过程函数 MainWndProc。
+		调用 CreateWindow 创建窗口，窗口尺寸根据客户区大小自动计算。
+		计算完成后显示窗口。
+
+	2、 Direct3D 初始化（D3DApp::InitDirect3D）
+		使用 D3D11CreateDevice 创建设备（ID3D11Device）和设备上下文（ID3D11DeviceContext）。
+		尝试硬件驱动（HARDWARE）、WARP（软件模拟）等，并请求特性等级 11.0/11.1。
+		获取与设备关联的 DXGI 工厂，创建交换链（IDXGISwapChain）。
+		调用 OnResize() 创建渲染目标视图、深度模板缓冲区、设置视口。
+
+	3、 资源与效果初始化（GameApp 部分）
+	InitEffect()：
+		从 HLSL 文件编译或加载已编译的着色器二进制文件（.cso）。创建顶点着色器、像素着色器，并根据顶点结构体 	VertexPosColor 创建输入布局（ID3D11InputLayout），描述顶点数据如何映射到着色器输入。
+
+	InitResource()：
+		定义顶点数据（现在是一个六边形的 8 个顶点，每个顶点有位置和颜色）。
+		创建顶点缓冲区（ID3D11Buffer），并将顶点数据拷贝到 GPU。
+		将顶点缓冲区绑定到输入装配阶段（IASetVertexBuffers），设置图元拓扑（三角形扇形	D3D_PRIMITIVE_TOPOLOGY_TRIANGLEFAN），绑定输入布局。
+		将顶点着色器和像素着色器绑定到渲染管线。
+
+3. 主循环：D3DApp::Run()
+	Run() 是程序的核心循环，它不断处理窗口消息并更新/绘制场景。
+
+	1、消息处理：DispatchMessage 将消息发送到窗口过程函数 MainWndProc，再由它转发给 D3DApp::MsgProc，处理如窗口大小变化、激活/失活、关闭等事件。
+	2、计时器：CpuTimer 类使用高精度性能计数器，提供 TotalTime()（总时间，不含暂停）和 DeltaTime()（帧间隔）。Tick() 在每帧开始时更新。
+	3、帧速率统计：CalculateFrameStats() 每秒计算一次 FPS 和帧耗时，并更新窗口标题。
+	4、更新与绘制：UpdateScene(dt) 由派生类实现，用于更新物体位置、动画等；DrawScene() 执行实际渲染。
+
+4. 绘制流程：GameApp::DrawScene()
+	每帧的绘制步骤如下：
+
+	清屏：用黑色（0,0,0,1）清除渲染目标视图，同时清除深度模板缓冲区（深度值设为 1.0，模板值 0）。
+	设置渲染状态（在 InitResource 中已设置好一次，但每帧需要确认绑定）：
+	顶点缓冲区、输入布局、图元拓扑已在初始化时设置，不会自动改变，因此每帧无需重复绑定（除非需要切换）。
+	调用绘制命令：m_pd3dImmediateContext->Draw(8, 0) 告诉 GPU 从顶点缓冲区取 8 个顶点，按三角形扇方式绘制。
+	呈现：m_pSwapChain->Present(0, 0) 将后台缓冲区的内容显示到屏幕上。
+
+其它：
+
+	1、 关键资源与数据流
+		顶点数据：VertexPosColor 结构体包含 XMFLOAT3 位置和 XMFLOAT4 颜色。顶点缓冲区存放这些数据，输入布局描述如何将其拆分给着色器。
+
+	着色器：
+		顶点着色器（Triangle_VS.hlsl）接收每个顶点的位置和颜色，将位置从局部坐标（float3）转为齐次坐标（float4），颜色直接传递。
+		像素着色器（Triangle_PS.hlsl）接收插值后的颜色，直接输出到渲染目标。
+		渲染管线：输入装配 → 顶点着色器 → 光栅化 → 像素着色器 → 输出合并（深度测试、混合等）。
+
+	2、 窗口消息处理与自适应
+
+	D3DApp::MsgProc 处理重要的窗口消息：
+		WM_ACTIVATE：窗口失活时暂停计时器和更新，激活时恢复。
+		WM_SIZE：窗口大小改变时，更新 m_ClientWidth/Height，若为正常状态则调用 OnResize()。
+		WM_ENTERSIZEMOVE 和 WM_EXITSIZEMOVE：在用户拖拽窗口边框时暂停渲染，释放后重建资源。
+		WM_DESTROY：发送退出消息。
+
+	OnResize() 负责销毁旧的渲染目标视图和深度缓冲区，调整交换链缓冲区大小，重新创建这些资源，并设置新的视口。
+
