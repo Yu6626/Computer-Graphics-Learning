@@ -1,0 +1,79 @@
+简单介绍：
+	该程序是一个基于Direct3D 11的Windows图形应用程序，使用ImGui提供用户交互界面，渲染一个彩色的四棱台，并允许用户通过鼠标操作和UI控件实时调整该物体的大小、、朝向和位置。
+
+1. 程序入口与初始化
+	WinMain（Main.cpp）：
+	创建 GameApp 实例，调用其 Init() 方法，若成功则调用 Run() 启动主循环。
+
+	GameApp::Init()（继承自 D3DApp）：
+	调用基类 D3DApp::Init()，该函数依次执行：
+		InitMainWindow()：注册窗口类，创建主窗口。
+		InitDirect3D()：创建设备（ID3D11Device）、上下文（ID3D11DeviceContext）、交换链（IDXGISwapChain），并检测 MSAA 支持、创建渲染目标视图和深度模板视图，设置视口。
+		InitImGui()：初始化 ImGui 上下文，设置 Win32 和 DX11 后端。
+		调用 GameApp::InitEffect()：编译顶点着色器和像素着色器（从 .hlsl 文件或预编译的 .cso 文件），创建输入布局。
+		调用 GameApp::InitResource()：
+		定义顶点数据（位置 + 颜色）和索引数据（构成 36 个三角形的 12 个面）。
+		创建顶点缓冲区、索引缓冲区和常量缓冲区（ConstantBuffer）。
+		初始化常量缓冲区数据（世界矩阵为单位矩阵，视图矩阵为相机位于 (0,0,-5) 看向原点，投影矩阵稍后在更新中动态设置）。
+		将着色器、缓冲区等绑定到管线，并设置调试对象名。
+
+2. 主循环（消息循环）
+	D3DApp::Run()：
+	使用 PeekMessage 循环，无阻塞地处理 Windows 消息。
+	当有消息时，翻译并分发。
+	无消息时，调用 m_Timer.Tick() 更新计时器，若应用未暂停（!m_AppPaused），则：
+		计算帧率统计（CalculateFrameStats()）。
+		启动 ImGui 新帧（ImGui_ImplDX11_NewFrame() 和 ImGui_ImplWin32_NewFrame()，然后 ImGui::NewFrame()）。
+		调用 GameApp::UpdateScene(dt) 更新场景逻辑。
+		调用 GameApp::DrawScene() 进行渲染。
+	若应用暂停（如窗口最小化或正在调整大小），则调用 Sleep(100) 降低 CPU 占用。
+
+3. 场景更新（GameApp::UpdateScene）
+	每帧传入 dt（两帧间的时间差，单位秒）。
+	ImGui 界面：
+	显示 About、Demo 和 User Guide 窗口。
+	自定义窗口包含复选框“Animate Square Frustum”（控制物体是否自动旋转）、重置按钮、缩放滑块、角度滑块、位置偏移滑块、FOV 滑块、orthoWidth滑块、颜色开关等。
+
+	变量 animateSquareFrustum 决定是否每帧增加 phi 和 theta 角度（绕 X 和 Y 轴旋转）。
+	通过 ImGui::IsAnyItemActive() 判断用户是否正在操作 UI，若非活动且鼠标拖动/滚轮，则：
+	左键拖动：平移物体（修改 tx, ty）。
+	右键拖动：旋转物体（修改 phi, theta）。
+	滚轮：缩放物体（修改 scale）。
+
+	常量缓冲区更新：
+		根据当前参数计算世界矩阵（缩放 → 绕 X 旋转 → 绕 Y 旋转 → 平移）。
+		计算投影矩阵（透视投影，使用当前 FOV 和宽高比；或者正交投影，使用当前orthoWidth和宽高比）。
+		使用 Map / Unmap 将更新的常量缓冲区数据提交到 GPU。
+
+4. 场景渲染（GameApp::DrawScene）
+	清除渲染目标视图（黑色背景）和深度/模板缓冲区。
+	设置输入装配阶段（顶点/索引缓冲区、图元类型、输入布局）。
+	执行 DrawIndexed(36, 0, 0) 以绘制 36 个索引（构成四棱台的 12 个三角形）（已在 InitResource 中绑定了着色器和常量缓冲区）。
+	调用 ImGui 渲染（ImGui::Render() + ImGui_ImplDX11_RenderDrawData()）将 UI 叠加到 3D 场景上。
+	调用 Present 交换前后缓冲区，显示图像。
+
+其它介绍：
+1、 窗口消息处理（D3DApp::MsgProc）
+	WM_ACTIVATE：窗口激活/失活时，设置 m_AppPaused 并调用计时器的 Stop() / Start()。
+	WM_SIZE：更新窗口尺寸，根据状态（最小化、最大化、恢复）决定是否暂停应用或调用 OnResize。
+	WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE：用户拖动窗口边框时，暂停应用并停止计时器；释放后恢复并重新调整渲染资源（OnResize）。
+	WM_DESTROY：发送 WM_QUIT 消息退出循环。
+	其他消息（如鼠标）被 ImGui 拦截或直接返回。
+
+2、计时器（CpuTimer）
+	使用 QueryPerformanceCounter 和 QueryPerformanceFrequency 实现高精度计时。
+
+	Reset()：记录起始时间。
+	Start() 和 Stop()：控制计时器暂停/恢复，内部维护累积暂停时间。
+	Tick()：每帧调用，计算 m_DeltaTime（帧间隔），用于动画和逻辑更新。
+	TotalTime()：返回从 Reset 开始经过的总时间（不含暂停）。
+
+3、着色器与常量缓冲区
+	顶点着色器（Square_frustum_VS.hlsl）：
+	将顶点位置依次乘世界、视图、投影矩阵（在C++ 侧已转置，此处直接 mul 得到正确结果），颜色原样传递。
+
+	像素着色器（Square_frustum_PS.hlsl）：
+	根据常量缓冲区中的 g_UseCustomColor 决定输出自定义颜色（g_Color）还是顶点颜色。
+
+	常量缓冲区（Square_frustum.hlsli 中定义）：
+	包含世界、视图、投影矩阵，自定义颜色和是否使用自定义颜色的标志。
